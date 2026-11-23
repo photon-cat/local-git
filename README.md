@@ -14,6 +14,14 @@ PLAN.md, "Code"). macpro's nightly restic backup already includes `/srv/git`
 `repos.txt` lists them. `bin/lgit check` compares that list against
 `/srv/git`.
 
+## Install
+
+```sh
+ln -s ~/projects/local-git/bin/lgit ~/.local/bin/lgit   # any dir on PATH
+```
+
+Needs only ssh access to the hub host as `jacob` and git.
+
 ## Usage
 
 ```sh

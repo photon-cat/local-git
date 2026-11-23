@@ -3,7 +3,7 @@
 set -euo pipefail
 HOST=${LGIT_HOST:-macpro}
 ROOT=${LGIT_ROOT:-/srv/git}
-SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0"); HERE=$(dirname "$(dirname "$SELF")")
+SELF=$(readlink -f "$0"); HERE=$(dirname "$(dirname "$SELF")")   # follows a symlink (e.g. ~/.local/bin/lgit)
 
 die() { echo "lgit: $*" >&2; exit 1; }
 valid() { [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != *.git ]] || die "bad repo name: $1"; }
