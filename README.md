@@ -95,9 +95,23 @@ The run is in the background, so `git push` returns at once and prints
 
 The pipeline lives in each project, not here. A deploy can do anything
 `jacob` can on macpro, such as restart a systemd user service (lingering is on
-for `jacob`, so those run without a login) or rsync and ssh to another box. See
-`test-project`'s `ci/` for a complete example: tests, then a release folder per
-commit, a `current` symlink, a user service on port 8200 and a health check.
+for `jacob`, so those run without a login) or rsync and ssh to another box.
+
+`examples/ci/` is a template to copy into a project and edit, not shared code,
+so each project keeps its pipeline in its own history:
+
+- `test.sh`: runs the tests (here `python3 -m unittest`; swap in your own)
+- `deploy.sh`: runs the app on macpro as a systemd user service, with a release
+  folder per commit, a `current` symlink, a health check and the 5 newest
+  releases kept. Set `APP`, `PORT` and `START` at the top.
+
+```sh
+cp -r ~/projects/local-git/examples/ci ./ci     # then edit ci/deploy.sh
+lgit ci <name>                                  # once per hub repo
+git add ci && git commit -m "CI" && git push
+```
+
+`test-project` on the hub uses this template.
 
 Re-run a commit without pushing:
 
