@@ -5,7 +5,8 @@
 # `ssh $HOST <plain shell/git>` or ordinary git against the SSH remote
 # $HOST:$ROOT/<name>.git, so the hub needs nothing installed beyond sshd and git.
 # Plain git can do all of this too (see README.md, "Without lgit"); lgit just saves
-# typing and keeps repos.txt, the list of repos on the hub, up to date.
+# typing and keeps repos.txt, the list of repos on the hub, up to date. Pushing
+# is always plain git, so lgit never pushes or rewrites remotes on its own.
 set -euo pipefail
 
 HOST=${LGIT_HOST:-macpro}     # ssh host of the hub; resolved by Tailscale MagicDNS
@@ -19,9 +20,8 @@ usage() {
   cat <<EOF
 usage: lgit <command>            (hub: $HOST:$ROOT)
   ls                      repos on the hub, with size and default branch
-  new <name> [desc]       create $ROOT/<name>.git on the hub, add it to repos.txt
-  add [dir] [name]        in a local repo: create the hub repo if needed,
-                          set remote 'hub', push all branches and tags
+  new <name> [desc]       create $ROOT/<name>.git on the hub, add it to repos.txt,
+                          print the git commands to connect a local repo
   clone <name> [dir]      clone from the hub, remote named 'hub'
   check                   compare repos.txt with what is on the hub
 EOF
@@ -49,19 +49,11 @@ case $cmd in
     # The description goes over stdin so quotes or spaces in it can't break the remote command.
     [[ -z $desc ]] || printf '%s\n' "$desc" | ssh "$HOST" "cat > $ROOT/$name.git/description"
     grep -qx "$name" "$HERE/repos.txt" || echo "$name" >> "$HERE/repos.txt"
-    echo "added $name to $HERE/repos.txt (commit it)" ;;
-
-  add)
-    # Hook an existing local repo up to the hub. Name defaults to the repo's folder name.
-    dir=${1:-.}; cd "$dir"; git rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git repo"
-    name=${2:-$(basename "$(git rev-parse --show-toplevel)")}; valid "$name"
-    url="$HOST:$ROOT/$name.git"
-    ssh "$HOST" "test -d $ROOT/$name.git" || "$SELF" new "$name"     # create on the hub if missing
-    if git remote get-url hub >/dev/null 2>&1; then git remote set-url hub "$url"; else git remote add hub "$url"; fi
-    # Normal (non-force) pushes: if the hub already has a different history, git refuses
-    # rather than overwriting it.
-    git push hub --all && git push hub --tags
-    echo "remote hub -> $url" ;;
+    echo "added $name to $HERE/repos.txt (commit it)"
+    # Connecting a local repo is left to plain git, so nothing is pushed or overwritten implicitly.
+    echo
+    echo "connect a local repo:   git remote add hub $HOST:$ROOT/$name.git && git push -u hub main"
+    echo "or clone it elsewhere:  lgit clone $name" ;;
 
   clone)
     # Plain git clone; -o hub names the remote 'hub' so 'origin' stays free for GitHub.

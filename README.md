@@ -6,7 +6,7 @@ daemon, web UI or extra user. Each machine pushes and fetches as `jacob` over SS
 
 This repo holds:
 
-- `bin/lgit`: a small client-side helper for creating and connecting hub repos
+- `bin/lgit`: a small client-side helper to list, create, clone and check hub repos
 - `repos.txt`: the list of repos that should exist on the hub
 
 ## How it works
@@ -25,7 +25,7 @@ This repo holds:
 - **lgit runs on your machine, not on macpro.** Each command either runs plain
   shell or git over `ssh macpro`, or runs ordinary git against the remote.
   macpro needs only sshd, git and the `/srv/git` folder.
-- **Remote name:** lgit names the remote `hub`, so `origin` can stay GitHub for
+- **Remote name:** the convention is `hub` (`lgit clone` uses it), so `origin` can stay GitHub for
   repos that live in both places.
 - **Backups:** macpro's nightly restic backup includes `/srv/git`
   (jacob-compute-mng `fleet.ini`, `backup =`), so nothing here handles backups.
@@ -45,14 +45,13 @@ the command.
 
 ```sh
 lgit ls                      # repos on the hub, with size and default branch
-lgit new <name> [desc]       # create /srv/git/<name>.git (bare, HEAD=main), add to repos.txt
-lgit add [dir] [name]        # in a local repo: create hub repo if needed, set remote `hub`,
-                             #   push all branches and tags (never forces)
+lgit new <name> [desc]       # create /srv/git/<name>.git (bare, HEAD=main), add to repos.txt,
+                             #   print the git commands to connect a local repo
 lgit clone <name> [dir]      # clone from the hub, remote named `hub`
 lgit check                   # repos.txt vs. what is on the hub; exits 1 if they differ
 ```
 
-`lgit` with no arguments prints this list. `new` (and `add`, when it creates the hub repo) appends to `repos.txt`;
+`lgit` with no arguments prints this list. `new` appends to `repos.txt`;
 commit that change here afterwards.
 
 Environment variables:
@@ -67,8 +66,9 @@ Environment variables:
 ```sh
 mkdir ~/projects/foo && cd ~/projects/foo
 git init -b main && echo "# foo" > README.md && git add . && git commit -m "Initial commit"
-lgit add                     # creates macpro:/srv/git/foo.git, remote `hub`, pushes
-git branch -u hub/main       # plain `git push` / `git pull` now use the hub
+lgit new foo                 # creates macpro:/srv/git/foo.git
+git remote add hub macpro:/srv/git/foo.git
+git push -u hub main         # -u: plain `git push` / `git pull` now use the hub
 ```
 
 ### Existing repo already on the hub
@@ -80,8 +80,8 @@ git log hub/main..main       # compare histories before pushing
 
 ## Without lgit
 
-lgit is a convenience. Plain git does the same, plus one `ssh` command to
-create the repo, which is the only step git can't do over SSH:
+lgit is a convenience; connecting and pushing is always plain git. Creating
+the repo is one `ssh` command, the only step git can't do over SSH:
 
 ```sh
 ssh macpro 'git init --bare -b main /srv/git/foo.git'
