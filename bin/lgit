@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# lgit: manage the bare repos on the fleet's git hub (macpro:/srv/git). See README.md.
+set -euo pipefail
+HOST=${LGIT_HOST:-macpro}
+ROOT=${LGIT_ROOT:-/srv/git}
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0"); HERE=$(dirname "$(dirname "$SELF")")
+
+die() { echo "lgit: $*" >&2; exit 1; }
+valid() { [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != *.git ]] || die "bad repo name: $1"; }
+
+cmd=${1:-}; shift || true
+case $cmd in
+  ls)
+    ssh "$HOST" "cd $ROOT && for r in *.git; do [ -d \"\$r\" ] || continue;
+      printf '%-24s %6s  %s\n' \"\${r%.git}\" \"\$(du -sh \"\$r\" | cut -f1)\" \"\$(git -C \"\$r\" symbolic-ref --short HEAD 2>/dev/null)\"; done" ;;
+  new)
+    name=${1:?usage: lgit new <name> [description]}; valid "$name"; desc=${2:-}
+    ssh "$HOST" "set -e; r=$ROOT/$name.git; [ ! -e \"\$r\" ] || { echo \"exists: \$r\" >&2; exit 1; }
+      git init -q --bare -b main \"\$r\"; echo \"created $HOST:\$r\""
+    [[ -z $desc ]] || printf '%s\n' "$desc" | ssh "$HOST" "cat > $ROOT/$name.git/description"
+    grep -qx "$name" "$HERE/repos.txt" || echo "$name" >> "$HERE/repos.txt"
+    echo "added $name to repos.txt (commit it)" ;;
+  add)
+    dir=${1:-.}; cd "$dir"; git rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git repo"
+    name=${2:-$(basename "$(git rev-parse --show-toplevel)")}; valid "$name"
+    url="$HOST:$ROOT/$name.git"
+    ssh "$HOST" "test -d $ROOT/$name.git" || "$SELF" new "$name"
+    if git remote get-url hub >/dev/null 2>&1; then git remote set-url hub "$url"; else git remote add hub "$url"; fi
+    git push hub --all && git push hub --tags
+    echo "remote hub -> $url" ;;
+  clone)
+    name=${1:?usage: lgit clone <name> [dir]}; valid "$name"
+    git clone -o hub "$HOST:$ROOT/$name.git" "${2:-$name}" ;;
+  check)
+    want=$(grep -v '^#' "$HERE/repos.txt" | sed '/^$/d' | sort)
+    have=$(ssh "$HOST" "cd $ROOT && ls -d *.git 2>/dev/null" | sed 's/\.git$//' | sort)
+    missing=$(comm -23 <(echo "$want") <(echo "$have")); extra=$(comm -13 <(echo "$want") <(echo "$have"))
+    [[ -z $missing ]] || echo "in repos.txt, not on $HOST: $missing"
+    [[ -z $extra ]] || echo "on $HOST, not in repos.txt: $extra"
+    [[ -n $missing$extra ]] && exit 1; echo "ok: $(echo "$want" | wc -l | tr -d ' ') repos" ;;
+  *) sed -n '/^```sh/,/^```/p' "$HERE/README.md" | sed '1d;$d'; [[ -z $cmd ]] || exit 2 ;;
+esac
