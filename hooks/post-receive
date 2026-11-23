@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# CI/CD hook for a hub repo (installed by `lgit ci <name>` as <repo>.git/hooks/post-receive).
+#
+# For each pushed branch, if the commit has ci/test.sh:
+#   1. export the commit into a fresh build folder
+#   2. run ci/test.sh                                   (CI)
+#   3. on main, if tests passed and ci/deploy.sh exists, run it   (CD)
+# The run happens in the background so `git push` returns at once. Runs are queued
+# one at a time per repo. Output: <repo>.git/ci/<commit>.log, a one-line result in
+# <repo>.git/ci/runs, and a notification to the ntfy URL in ~/.config/cm/notify.
+#
+# Scripts get CI_REPO, CI_BRANCH, CI_COMMIT in the environment and run from the
+# build folder (deleted afterwards). Re-run a commit by hand:
+#   ssh macpro 'cd /srv/git/<name>.git && echo "- <sha> refs/heads/main" | hooks/post-receive'
+
+repo=$(cd "$(dirname "$0")/.." && pwd)
+name=$(basename "$repo" .git)
+mkdir -p "$repo/ci"
+
+run() {   # run <commit> <branch>
+  local commit=$1 branch=$2 log="$repo/ci/$1.log" build rc step
+  exec 9>"$repo/ci/lock"; flock 9                  # one run per repo at a time
+  build=$(mktemp -d)
+  trap 'rm -rf "$build"' EXIT
+  {
+    echo "== $name $branch $commit  $(date '+%F %T')"
+    git --git-dir="$repo" archive "$commit" | tar -x -C "$build"
+    cd "$build"
+    if [[ ! -x ci/test.sh ]]; then echo "no executable ci/test.sh, skipping"; exit 0; fi
+    export CI_REPO=$name CI_BRANCH=$branch CI_COMMIT=$commit
+    step=test; echo "== test"; ./ci/test.sh; rc=$?
+    if [[ $rc == 0 && $branch == main && -x ci/deploy.sh ]]; then
+      step=deploy; echo "== deploy"; ./ci/deploy.sh; rc=$?
+    fi
+    echo "== exit $rc ($step)"
+    result=$([[ $rc == 0 ]] && echo "ok" || echo "FAILED in $step")
+    echo "$(date '+%F %T') $branch ${commit:0:7} $result" >> "$repo/ci/runs"
+    notify=$(cat ~/.config/cm/notify 2>/dev/null)
+    [[ -z $notify ]] || curl -s -m 10 -H "Title: $name ${commit:0:7} ($branch)" \
+      -H "Tags: $([[ $rc == 0 ]] && echo white_check_mark || echo x)" -d "$result" "$notify" >/dev/null
+  } >"$log" 2>&1
+}
+
+while read -r old new ref; do
+  [[ $ref == refs/heads/* && $new != 0000000000000000000000000000000000000000 ]] || continue
+  # Detach fully: no inherited git env, no tie to the pushing ssh session.
+  env -u GIT_DIR -u GIT_QUARANTINE_PATH -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    setsid bash -c "$(declare -p repo name); $(declare -f run); run $new ${ref#refs/heads/}" \
+    </dev/null >/dev/null 2>&1 &
+  echo "ci: ${new:0:7} on ${ref#refs/heads/} queued (log: $repo/ci/$new.log)"
+done

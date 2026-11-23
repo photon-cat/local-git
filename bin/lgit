@@ -3,6 +3,7 @@
 #
 # Runs on a client, not on the hub: each command is one ssh call or one git clone,
 # so the hub needs only sshd and git. Pushing and adding remotes is left to plain git.
+# `ci` installs hooks/post-receive (CI/CD on push; see that file) into a hub repo.
 set -euo pipefail
 
 HOST=${LGIT_HOST:-macpro}     # ssh host of the hub (Tailscale MagicDNS name)
@@ -10,6 +11,8 @@ ROOT=${LGIT_ROOT:-/srv/git}   # folder of <name>.git bare repos on the hub
 
 # Names go into remote shell commands, so allow only safe characters.
 check_name() { [[ ${1:-} =~ ^[A-Za-z0-9._-]+$ && $1 != *.git ]] || { echo "lgit: bad repo name: ${1:-}" >&2; exit 2; }; }
+
+HOOK=$(dirname "$(readlink -f "$0")")/../hooks/post-receive   # follows the ~/.local/bin symlink
 
 case ${1:-} in
   ls)    # name, size and default branch of every repo on the hub
@@ -27,7 +30,19 @@ case ${1:-} in
     check_name "${2:-}"
     git clone -o hub "$HOST:$ROOT/$2.git" ${3:+"$3"} ;;
 
+  ci)    # install or update the CI/CD hook in a hub repo
+    check_name "${2:-}"
+    ssh "$HOST" "test -d $ROOT/$2.git && cat > $ROOT/$2.git/hooks/post-receive && chmod +x $ROOT/$2.git/hooks/post-receive" <"$HOOK" \
+      || { echo "lgit: no repo $HOST:$ROOT/$2.git" >&2; exit 1; }
+    echo "ci hook installed in $HOST:$ROOT/$2.git (runs ci/test.sh, then ci/deploy.sh on main)" ;;
+
+  log)   # recent CI runs, then the log of the latest run (or of the given commit)
+    check_name "${2:-}"; [[ -z ${3:-} || $3 =~ ^[0-9a-f]+$ ]] || { echo "lgit: bad commit: $3" >&2; exit 2; }
+    ssh "$HOST" "cd $ROOT/$2.git/ci 2>/dev/null || { echo 'no CI runs yet'; exit 1; }
+      tail -n 10 runs 2>/dev/null; echo
+      f=\$(ls -t ${3:-}*.log 2>/dev/null | head -1); [ -n \"\$f\" ] && cat \"\$f\" || echo 'no log yet'" ;;
+
   *)
-    echo "usage: lgit ls | new <name> | clone <name> [dir]      (hub: $HOST:$ROOT)"
+    echo "usage: lgit ls | new <name> | clone <name> [dir] | ci <name> | log <name> [commit]      (hub: $HOST:$ROOT)"
     [[ -z ${1:-} || $1 == -h || $1 == --help || $1 == help ]] || exit 2 ;;
 esac

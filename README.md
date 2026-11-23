@@ -5,7 +5,8 @@ used as an ordinary SSH git remote (`macpro:/srv/git/<name>.git`). There is no
 daemon, web UI or extra user. Each machine pushes and fetches as `jacob` over SSH.
 
 This repo holds `bin/lgit`, a small client-side helper to list, create and
-clone hub repos. The hub itself is the only record of which repos exist.
+clone hub repos, and `hooks/post-receive`, an optional CI/CD hook. The hub
+itself is the only record of which repos exist.
 
 ## How it works
 
@@ -45,6 +46,8 @@ lgit ls                      # repos on the hub, with size and default branch
 lgit new <name>              # create /srv/git/<name>.git (bare, HEAD=main) and print
                              #   the git command to connect a local repo to it
 lgit clone <name> [dir]      # clone from the hub, remote named `hub`
+lgit ci <name>               # install/update the CI/CD hook in that hub repo
+lgit log <name> [commit]     # last CI runs, then the newest (or that commit's) log
 ```
 
 `lgit` with no arguments prints a one-line usage.
@@ -72,6 +75,38 @@ git push -u hub main         # -u: plain `git push` / `git pull` now use the hub
 git remote add hub macpro:/srv/git/gnsswire.git && git fetch hub
 git log hub/main..main       # compare histories before pushing
 ```
+
+## CI/CD
+
+`lgit ci <name>` installs `hooks/post-receive` into `/srv/git/<name>.git/hooks/`.
+After that, every push to the hub:
+
+1. exports the pushed commit into a fresh temp folder on macpro,
+2. runs the repo's `ci/test.sh` (CI); a commit without one is skipped,
+3. on `main`, if the tests passed and `ci/deploy.sh` exists, runs it (CD).
+
+The run is in the background, so `git push` returns at once and prints
+`remote: ci: <sha> on <branch> queued`. Runs are one at a time per repo, as
+`jacob`, with `CI_REPO`, `CI_BRANCH` and `CI_COMMIT` set. Results:
+
+- `/srv/git/<name>.git/ci/<commit>.log`: full output (`lgit log <name>`)
+- `/srv/git/<name>.git/ci/runs`: one line per run, `ok` or `FAILED in test|deploy`
+- an ntfy alert to the URL in macpro's `~/.config/cm/notify`, if present
+
+The pipeline lives in each project, not here. A deploy can do anything
+`jacob` can on macpro, such as restart a systemd user service (lingering is on
+for `jacob`, so those run without a login) or rsync and ssh to another box. See
+`test-project`'s `ci/` for a complete example: tests, then a release folder per
+commit, a `current` symlink, a user service on port 8200 and a health check.
+
+Re-run a commit without pushing:
+
+```sh
+ssh macpro 'cd /srv/git/<name>.git && echo "- <sha> refs/heads/main" | hooks/post-receive'
+```
+
+After editing `hooks/post-receive`, run `lgit ci <name>` again for each repo
+that uses it.
 
 ## Without lgit
 
@@ -102,7 +137,9 @@ Also add `/srv/git` to the new box's `backup =` line in `fleet.ini`.
   store (`/srv/store`), not in git.
 - `/srv/git` is on macpro's SSD, which is nearly full; watch it if large repos
   are added.
-- No `git gc` schedule, no hooks, and no per-user access control: anyone who
-  can ssh to macpro as `jacob` can read and write every repo.
+- No `git gc` schedule and no per-user access control: anyone who can ssh to
+  macpro as `jacob` can read and write every repo.
+- CI runs unsandboxed as `jacob` on macpro, so only enable it on your own repos.
+  There's no web UI or commit status; old logs in `ci/` aren't pruned.
 - Deleting or renaming a hub repo is manual: `ssh macpro rm -rf /srv/git/x.git`
   or `ssh macpro mv /srv/git/x.git /srv/git/y.git`.
