@@ -1,42 +1,84 @@
 #!/usr/bin/env bash
-# lgit: manage the bare repos on the fleet's git hub (macpro:/srv/git). See README.md.
+# lgit: manage the bare repos on the fleet's private git hub (macpro:/srv/git).
+#
+# Runs on a client (laptop, mini, ...), never on the hub. Every command is either
+# `ssh $HOST <plain shell/git>` or ordinary git against the SSH remote
+# $HOST:$ROOT/<name>.git, so the hub needs nothing installed beyond sshd and git.
+# Plain git can do all of this too (see README.md, "Without lgit"); lgit just saves
+# typing and keeps repos.txt, the list of repos on the hub, up to date.
 set -euo pipefail
-HOST=${LGIT_HOST:-macpro}
-ROOT=${LGIT_ROOT:-/srv/git}
-SELF=$(readlink -f "$0"); HERE=$(dirname "$(dirname "$SELF")")   # follows a symlink (e.g. ~/.local/bin/lgit)
+
+HOST=${LGIT_HOST:-macpro}     # ssh host of the hub; resolved by Tailscale MagicDNS
+ROOT=${LGIT_ROOT:-/srv/git}   # folder on the hub that holds <name>.git bare repos
+
+# Resolve our real location even when called through a symlink (~/.local/bin/lgit),
+# so repos.txt is found in the local-git checkout, not next to the link.
+SELF=$(readlink -f "$0"); HERE=$(dirname "$(dirname "$SELF")")
+
+usage() {
+  cat <<EOF
+usage: lgit <command>            (hub: $HOST:$ROOT)
+  ls                      repos on the hub, with size and default branch
+  new <name> [desc]       create $ROOT/<name>.git on the hub, add it to repos.txt
+  add [dir] [name]        in a local repo: create the hub repo if needed,
+                          set remote 'hub', push all branches and tags
+  clone <name> [dir]      clone from the hub, remote named 'hub'
+  check                   compare repos.txt with what is on the hub
+EOF
+}
 
 die() { echo "lgit: $*" >&2; exit 1; }
-valid() { [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != *.git ]] || die "bad repo name: $1"; }
+
+# Repo names are spliced into remote shell commands, so allow only safe characters.
+valid() { [[ $1 =~ ^[A-Za-z0-9._-]+$ && $1 != *.git ]] || die "bad repo name: $1 (letters, digits, . _ -; no .git suffix)"; }
 
 cmd=${1:-}; shift || true
 case $cmd in
+
   ls)
+    # One ssh call: for each bare repo print name, disk size, and the branch HEAD points at.
     ssh "$HOST" "cd $ROOT && for r in *.git; do [ -d \"\$r\" ] || continue;
       printf '%-24s %6s  %s\n' \"\${r%.git}\" \"\$(du -sh \"\$r\" | cut -f1)\" \"\$(git -C \"\$r\" symbolic-ref --short HEAD 2>/dev/null)\"; done" ;;
+
   new)
+    # Create an empty bare repo on the hub (refuses to overwrite one that exists),
+    # optionally set its description, then record the name in repos.txt.
     name=${1:?usage: lgit new <name> [description]}; valid "$name"; desc=${2:-}
     ssh "$HOST" "set -e; r=$ROOT/$name.git; [ ! -e \"\$r\" ] || { echo \"exists: \$r\" >&2; exit 1; }
       git init -q --bare -b main \"\$r\"; echo \"created $HOST:\$r\""
+    # The description goes over stdin so quotes or spaces in it can't break the remote command.
     [[ -z $desc ]] || printf '%s\n' "$desc" | ssh "$HOST" "cat > $ROOT/$name.git/description"
     grep -qx "$name" "$HERE/repos.txt" || echo "$name" >> "$HERE/repos.txt"
-    echo "added $name to repos.txt (commit it)" ;;
+    echo "added $name to $HERE/repos.txt (commit it)" ;;
+
   add)
+    # Hook an existing local repo up to the hub. Name defaults to the repo's folder name.
     dir=${1:-.}; cd "$dir"; git rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git repo"
     name=${2:-$(basename "$(git rev-parse --show-toplevel)")}; valid "$name"
     url="$HOST:$ROOT/$name.git"
-    ssh "$HOST" "test -d $ROOT/$name.git" || "$SELF" new "$name"
+    ssh "$HOST" "test -d $ROOT/$name.git" || "$SELF" new "$name"     # create on the hub if missing
     if git remote get-url hub >/dev/null 2>&1; then git remote set-url hub "$url"; else git remote add hub "$url"; fi
+    # Normal (non-force) pushes: if the hub already has a different history, git refuses
+    # rather than overwriting it.
     git push hub --all && git push hub --tags
     echo "remote hub -> $url" ;;
+
   clone)
+    # Plain git clone; -o hub names the remote 'hub' so 'origin' stays free for GitHub.
     name=${1:?usage: lgit clone <name> [dir]}; valid "$name"
     git clone -o hub "$HOST:$ROOT/$name.git" "${2:-$name}" ;;
+
   check)
+    # repos.txt (minus comments and blank lines) vs. the *.git folders on the hub.
+    # Exit 1 if they differ, so it can be used in scripts.
     want=$(grep -v '^#' "$HERE/repos.txt" | sed '/^$/d' | sort)
     have=$(ssh "$HOST" "cd $ROOT && ls -d *.git 2>/dev/null" | sed 's/\.git$//' | sort)
     missing=$(comm -23 <(echo "$want") <(echo "$have")); extra=$(comm -13 <(echo "$want") <(echo "$have"))
     [[ -z $missing ]] || echo "in repos.txt, not on $HOST: $missing"
     [[ -z $extra ]] || echo "on $HOST, not in repos.txt: $extra"
-    [[ -n $missing$extra ]] && exit 1; echo "ok: $(echo "$want" | wc -l | tr -d ' ') repos" ;;
-  *) sed -n '/^```sh/,/^```/p' "$HERE/README.md" | sed '1d;$d'; [[ -z $cmd ]] || exit 2 ;;
+    [[ -n $missing$extra ]] && exit 1
+    echo "ok: $(echo "$want" | wc -l | tr -d ' ') repos" ;;
+
+  ""|-h|--help|help) usage ;;
+  *) usage >&2; exit 2 ;;
 esac
