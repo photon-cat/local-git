@@ -4,10 +4,8 @@ The fleet's private git hub: bare repos on macpro at `/srv/git/<name>.git`,
 used as an ordinary SSH git remote (`macpro:/srv/git/<name>.git`). There is no
 daemon, web UI or extra user. Each machine pushes and fetches as `jacob` over SSH.
 
-This repo holds:
-
-- `bin/lgit`: a small client-side helper to list, create, clone and check hub repos
-- `repos.txt`: the list of repos that should exist on the hub
+This repo holds `bin/lgit`, a small client-side helper to list, create and
+clone hub repos. The hub itself is the only record of which repos exist.
 
 ## How it works
 
@@ -25,8 +23,8 @@ This repo holds:
 - **lgit runs on your machine, not on macpro.** Each command either runs plain
   shell or git over `ssh macpro`, or runs ordinary git against the remote.
   macpro needs only sshd, git and the `/srv/git` folder.
-- **Remote name:** the convention is `hub` (`lgit clone` uses it), so `origin` can stay GitHub for
-  repos that live in both places.
+- **Remote name:** the convention is `hub` (`lgit clone` uses it), so `origin`
+  can stay GitHub for repos that live in both places.
 - **Backups:** macpro's nightly restic backup includes `/srv/git`
   (jacob-compute-mng `fleet.ini`, `backup =`), so nothing here handles backups.
 
@@ -37,22 +35,19 @@ git clone https://github.com/photon-cat/local-git ~/projects/local-git
 ln -s ~/projects/local-git/bin/lgit ~/.local/bin/lgit     # any dir on PATH
 ```
 
-Requirements: git, and key-based SSH to `macpro` as `jacob`. lgit follows the
-symlink back to this checkout to find `repos.txt`, so `git pull` here updates
-the command.
+Requirements: git, and key-based SSH to `macpro` as `jacob`. Because it's a
+symlink, `git pull` here updates the command.
 
 ## Usage
 
 ```sh
 lgit ls                      # repos on the hub, with size and default branch
-lgit new <name> [desc]       # create /srv/git/<name>.git (bare, HEAD=main), add to repos.txt,
-                             #   print the git commands to connect a local repo
+lgit new <name>              # create /srv/git/<name>.git (bare, HEAD=main) and print
+                             #   the git command to connect a local repo to it
 lgit clone <name> [dir]      # clone from the hub, remote named `hub`
-lgit check                   # repos.txt vs. what is on the hub; exits 1 if they differ
 ```
 
-`lgit` with no arguments prints this list. `new` appends to `repos.txt`;
-commit that change here afterwards.
+`lgit` with no arguments prints a one-line usage.
 
 Environment variables:
 
@@ -90,14 +85,12 @@ git push -u hub main
 git clone -o hub macpro:/srv/git/foo.git    # on another machine
 ```
 
-Add the name to `repos.txt` if you want `lgit check` to stay accurate.
-
 ## Moving the hub to another box
 
 ```sh
 ssh newbox 'sudo apt-get install -y git && sudo mkdir -p /srv/git && sudo chown jacob:jacob /srv/git'
 ssh macpro 'rsync -a /srv/git/ newbox:/srv/git/'
-LGIT_HOST=newbox lgit check
+LGIT_HOST=newbox lgit ls
 git remote set-url hub newbox:/srv/git/<name>.git     # in each clone
 ```
 
@@ -111,5 +104,5 @@ Also add `/srv/git` to the new box's `backup =` line in `fleet.ini`.
   are added.
 - No `git gc` schedule, no hooks, and no per-user access control: anyone who
   can ssh to macpro as `jacob` can read and write every repo.
-- Deleting or renaming a hub repo is manual (`ssh macpro rm -rf /srv/git/x.git`),
-  followed by an edit to `repos.txt`.
+- Deleting or renaming a hub repo is manual: `ssh macpro rm -rf /srv/git/x.git`
+  or `ssh macpro mv /srv/git/x.git /srv/git/y.git`.
