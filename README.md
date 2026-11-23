@@ -52,7 +52,7 @@ lgit clone <name> [dir]      # clone from the hub, remote named `hub`
 lgit check                   # repos.txt vs. what is on the hub; exits 1 if they differ
 ```
 
-`lgit` with no arguments prints this list. `new` and `add` edit `repos.txt`;
+`lgit` with no arguments prints this list. `new` (and `add`, when it creates the hub repo) appends to `repos.txt`;
 commit that change here afterwards.
 
 Environment variables:
