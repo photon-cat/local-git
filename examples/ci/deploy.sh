@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# CD: run by the hub's hook on main after ci/test.sh passes. Deploys onto macpro itself:
+# CD: run by the hub's hook on main after ci/test.sh passes. Deploys onto the hub itself:
 #   ~/apps/$APP/releases/<commit>/   one folder per deploy (last 5 kept)
 #   ~/apps/$APP/current              symlink to the live release
 #   systemd user service $APP        $START, with PORT and APP_VERSION in its environment
 # Rollback: point `current` at an older release and `systemctl --user restart $APP`.
 #
+# Needs `loginctl enable-linger` for the hub user so the service runs without a login.
 # Template from local-git/examples: copy to <project>/ci/deploy.sh and edit these three.
 # The app must answer GET / on $PORT with a body containing APP_VERSION (the health check).
 set -euo pipefail
 APP=test-project                 # service and folder name
-PORT=8200                        # pick a free port: ssh macpro ss -ltn
+PORT=8200                        # pick a free port: ssh <hub> ss -ltn
 START="/usr/bin/python3 hello.py"   # command run from the release folder
 base=~/apps/$APP rel=~/apps/$APP/releases/$CI_COMMIT
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}   # for systemctl --user

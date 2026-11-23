@@ -7,11 +7,12 @@
 #   3. on main, if tests passed and ci/deploy.sh exists, run it   (CD)
 # The run happens in the background so `git push` returns at once. Runs are queued
 # one at a time per repo. Output: <repo>.git/ci/<commit>.log, a one-line result in
-# <repo>.git/ci/runs, and a notification to the ntfy URL in ~/.config/cm/notify.
+# <repo>.git/ci/runs, and, if `git config lgit.notify` is set on the hub (per repo or
+# --global), a POST of the result to that URL (e.g. an ntfy.sh topic).
 #
 # Scripts get CI_REPO, CI_BRANCH, CI_COMMIT in the environment and run from the
 # build folder (deleted afterwards). Re-run a commit by hand:
-#   ssh macpro 'cd /srv/git/<name>.git && echo "- <sha> refs/heads/main" | hooks/post-receive'
+#   ssh <hub> 'cd /srv/git/<name>.git && echo "- <sha> refs/heads/main" | hooks/post-receive'
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 name=$(basename "$repo" .git)
@@ -35,7 +36,7 @@ run() {   # run <commit> <branch>
     echo "== exit $rc ($step)"
     result=$([[ $rc == 0 ]] && echo "ok" || echo "FAILED in $step")
     echo "$(date '+%F %T') $branch ${commit:0:7} $result" >> "$repo/ci/runs"
-    notify=$(cat ~/.config/cm/notify 2>/dev/null)
+    notify=$(git --git-dir="$repo" config lgit.notify)
     [[ -z $notify ]] || curl -s -m 10 -H "Title: $name ${commit:0:7} ($branch)" \
       -H "Tags: $([[ $rc == 0 ]] && echo white_check_mark || echo x)" -d "$result" "$notify" >/dev/null
   } >"$log" 2>&1

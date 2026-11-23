@@ -1,48 +1,61 @@
 #!/usr/bin/env bash
-# lgit: list, create and clone bare repos on the fleet's git hub (macpro:/srv/git).
+# lgit: list, create and clone bare git repos on a hub reached over SSH, and
+# install the CI/CD hook into them. Runs on a client; the hub needs only sshd and git.
 #
-# Runs on a client, not on the hub: each command is one ssh call or one git clone,
-# so the hub needs only sshd and git. Pushing and adding remotes is left to plain git.
-# `ci` installs hooks/post-receive (CI/CD on push; see that file) into a hub repo.
+# Config: ~/.config/lgit/config (shell syntax), overridden by the environment:
+#   LGIT_HOST   ssh host of the hub (required)
+#   LGIT_USER   ssh user on the hub (default: whatever ssh uses for that host)
+#   LGIT_ROOT   folder of <name>.git bare repos on the hub (default /srv/git)
 set -euo pipefail
 
-HOST=${LGIT_HOST:-macpro}     # ssh host of the hub (Tailscale MagicDNS name)
-ROOT=${LGIT_ROOT:-/srv/git}   # folder of <name>.git bare repos on the hub
+# Environment wins over the config file.
+env_host=${LGIT_HOST-} env_user=${LGIT_USER-} env_root=${LGIT_ROOT-}
+cfg=${XDG_CONFIG_HOME:-$HOME/.config}/lgit/config
+[[ -f $cfg ]] && . "$cfg"
+HOST=${env_host:-${LGIT_HOST:-}}
+HUB_USER=${env_user:-${LGIT_USER:-}}
+ROOT=${env_root:-${LGIT_ROOT:-/srv/git}}
+SSH=${HUB_USER:+$HUB_USER@}$HOST              # what ssh and git remotes use: [user@]host
 
+HOOK=$(dirname "$(readlink -f "$0")")/../hooks/post-receive   # follows a ~/.local/bin symlink
+
+die() { echo "lgit: $1" >&2; exit "${2:-1}"; }
 # Names go into remote shell commands, so allow only safe characters.
-check_name() { [[ ${1:-} =~ ^[A-Za-z0-9._-]+$ && $1 != *.git ]] || { echo "lgit: bad repo name: ${1:-}" >&2; exit 2; }; }
-
-HOOK=$(dirname "$(readlink -f "$0")")/../hooks/post-receive   # follows the ~/.local/bin symlink
+check_name() { [[ ${1:-} =~ ^[A-Za-z0-9._-]+$ && $1 != *.git ]] || die "bad repo name: ${1:-}" 2; }
+need_host() { [[ -n $HOST ]] || die "no hub configured: set LGIT_HOST in $cfg or the environment" 2; }
 
 case ${1:-} in
   ls)    # name, size and default branch of every repo on the hub
-    ssh "$HOST" "cd $ROOT && for r in *.git; do [ -d \"\$r\" ] || continue   # skip the literal *.git of an empty hub
+    need_host
+    ssh "$SSH" "cd $ROOT && for r in *.git; do [ -d \"\$r\" ] || continue
       printf '%-24s %6s  %s\n' \"\${r%.git}\" \"\$(du -sh \"\$r\" | cut -f1)\" \"\$(git -C \"\$r\" symbolic-ref --short HEAD)\"; done" ;;
 
   new)   # create an empty bare repo (fails if it exists), then show how to connect to it
-    check_name "${2:-}"
-    ssh "$HOST" "test ! -e $ROOT/$2.git && git init -q --bare -b main $ROOT/$2.git" \
-      || { echo "lgit: $HOST:$ROOT/$2.git already exists or could not be created" >&2; exit 1; }
-    echo "created $HOST:$ROOT/$2.git"
-    echo "connect: git remote add hub $HOST:$ROOT/$2.git && git push -u hub main" ;;
+    need_host; check_name "${2:-}"
+    ssh "$SSH" "test ! -e $ROOT/$2.git && git init -q --bare -b main $ROOT/$2.git" \
+      || die "$SSH:$ROOT/$2.git already exists or could not be created"
+    echo "created $SSH:$ROOT/$2.git"
+    echo "connect: git remote add hub $SSH:$ROOT/$2.git && git push -u hub main" ;;
 
-  clone) # clone with the remote named 'hub', leaving 'origin' free for GitHub
-    check_name "${2:-}"
-    git clone -o hub "$HOST:$ROOT/$2.git" ${3:+"$3"} ;;
+  clone) # clone with the remote named 'hub', leaving 'origin' free for e.g. GitHub
+    need_host; check_name "${2:-}"
+    git clone -o hub "$SSH:$ROOT/$2.git" ${3:+"$3"} ;;
 
   ci)    # install or update the CI/CD hook in a hub repo
-    check_name "${2:-}"
-    ssh "$HOST" "test -d $ROOT/$2.git && cat > $ROOT/$2.git/hooks/post-receive && chmod +x $ROOT/$2.git/hooks/post-receive" <"$HOOK" \
-      || { echo "lgit: no repo $HOST:$ROOT/$2.git" >&2; exit 1; }
-    echo "ci hook installed in $HOST:$ROOT/$2.git (runs ci/test.sh, then ci/deploy.sh on main)" ;;
+    need_host; check_name "${2:-}"
+    ssh "$SSH" "test -d $ROOT/$2.git && cat > $ROOT/$2.git/hooks/post-receive && chmod +x $ROOT/$2.git/hooks/post-receive" <"$HOOK" \
+      || die "no repo $SSH:$ROOT/$2.git"
+    echo "ci hook installed in $SSH:$ROOT/$2.git" ;;
 
   log)   # recent CI runs, then the log of the latest run (or of the given commit)
-    check_name "${2:-}"; [[ -z ${3:-} || $3 =~ ^[0-9a-f]+$ ]] || { echo "lgit: bad commit: $3" >&2; exit 2; }
-    ssh "$HOST" "cd $ROOT/$2.git/ci 2>/dev/null || { echo 'no CI runs yet'; exit 1; }
+    need_host; check_name "${2:-}"
+    [[ -z ${3:-} || $3 =~ ^[0-9a-f]+$ ]] || die "bad commit: $3" 2
+    ssh "$SSH" "cd $ROOT/$2.git/ci 2>/dev/null || { echo 'no CI runs yet'; exit 1; }
       tail -n 10 runs 2>/dev/null; echo
       f=\$(ls -t ${3:-}*.log 2>/dev/null | head -1); [ -n \"\$f\" ] && cat \"\$f\" || echo 'no log yet'" ;;
 
   *)
-    echo "usage: lgit ls | new <name> | clone <name> [dir] | ci <name> | log <name> [commit]      (hub: $HOST:$ROOT)"
+    echo "usage: lgit ls | new <name> | clone <name> [dir] | ci <name> | log <name> [commit]"
+    if [[ -n $HOST ]]; then echo "hub:   $SSH:$ROOT"; else echo "hub:   not configured (set LGIT_HOST in $cfg)"; fi
     [[ -z ${1:-} || $1 == -h || $1 == --help || $1 == help ]] || exit 2 ;;
 esac
